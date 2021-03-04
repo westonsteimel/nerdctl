@@ -18,35 +18,60 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/AkihiroSuda/nerdctl/pkg/testutil"
+	"github.com/containerd/containerd/pkg/cap"
 	"github.com/pkg/errors"
+	"gotest.tools/v3/assert"
+)
+
+func pid1CapBitmap() (uint64, error) {
+	f, err := os.Open("/proc/1/status")
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	caps, err := cap.ParseProcPIDStatus(f)
+	if err != nil {
+		return 0, err
+	}
+	capEff := caps[cap.Effective]
+	return capEff, nil
+}
+
+const (
+	CAP_NET_RAW = 13
 )
 
 func TestRunCap(t *testing.T) {
+	allCaps, err := pid1CapBitmap()
+	assert.NilError(t, err)
+	t.Logf("allCaps=%016x", allCaps)
 	base := testutil.NewBase(t)
 	type testCase struct {
 		args   []string
-		capEff string
+		capEff uint64
 	}
 	testCases := []testCase{
 		{
-			capEff: "00000000a80425fb",
+			capEff: 0xa80425fb,
 		},
 		{
 			args:   []string{"--cap-add=all"},
-			capEff: "0000003fffffffff",
+			capEff: allCaps,
 		},
 		{
 			args:   []string{"--cap-add=all", "--cap-drop=net_raw"},
-			capEff: "0000003fffffdfff",
+			capEff: allCaps ^ (1 << CAP_NET_RAW),
 		},
 		{
 			args:   []string{"--cap-drop=all", "--cap-add=net_raw"},
-			capEff: "0000000000002000",
+			capEff: 1 << CAP_NET_RAW,
 		},
 	}
 	for _, tc := range testCases {
@@ -61,7 +86,7 @@ func TestRunCap(t *testing.T) {
 			args = append(args, tc.args...)
 			args = append(args, testutil.AlpineImage, "grep", "-w", "^CapEff:", "/proc/1/status")
 			cmd := base.Cmd(args...)
-			cmd.AssertOut(tc.capEff)
+			cmd.AssertOut(fmt.Sprintf("%016x", tc.capEff))
 		})
 	}
 }
